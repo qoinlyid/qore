@@ -300,3 +300,58 @@ func RemoveModule(module *Module, removes []string) error {
 	}
 	return errors.Join(errs...)
 }
+
+// UpdateModule updates auto gen code for given module(s).
+func UpdateModule(modules []*Module) error {
+	// Generated code.
+	const (
+		genMapKey = "_gen.go"
+		pubMapKey = "_public_gen.go"
+	)
+	tpl, ok := moduleGenerateds[genMapKey]
+	if !ok {
+		return errors.New("code template not foud")
+	}
+
+	var errs []error
+	for _, module := range modules {
+		moddir := filepath.Join(module.RootProjectDir, module.Dir, module.Name)
+		fpath := filepath.Join(moddir, module.Name+genMapKey)
+		entries, err := os.ReadDir(moddir)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("failed to read module dir: %w", err))
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			pubcodename := module.Name + pubMapKey
+			if pubcodename == entry.Name() {
+				module.MakePublic = true
+				break
+			}
+		}
+
+		tmpl, err := template.New("code").Parse(tpl)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("failed to parse code template: %w", err))
+			continue
+		}
+
+		// Create or update file.
+		f, err := os.Create(fpath)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("failed to create or open %s: %w", fpath, err))
+			continue
+		}
+		defer f.Close()
+
+		// Re-write code.
+		if err := tmpl.Execute(f, module); err != nil {
+			errs = append(errs, fmt.Errorf("failed to write code: %w", err))
+		}
+	}
+	err := errors.Join(errs...)
+	return err
+}

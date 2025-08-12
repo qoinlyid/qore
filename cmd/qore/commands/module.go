@@ -3,7 +3,8 @@ package commands
 import (
 	"errors"
 	"fmt"
-	"os"
+	"maps"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -37,70 +38,33 @@ See each sub-command's help for details on how to use the module command.`,
 		Short: "Remove existing module from the project",
 		RunE:  modRemoveRunE,
 	}
+
+	// Module add dependency command
+	modDepAddCmd = &cobra.Command{
+		Use:   "add-dependency",
+		Short: "Add dependency to the module",
+		RunE:  modDepAddRunE,
+	}
 )
+
+var modNewDep bool
 
 func init() {
 	// Add sub command.
 	modCmd.AddCommand(modNewCmd)
 	modCmd.AddCommand(modRemoveCmd)
 
+	modDepAddCmd.Flags().BoolVarP(&modNewDep, "new", "n", false, "--new to add new dependency into module")
+	modCmd.AddCommand(modDepAddCmd)
+
 	// Add to root.
 	rootCmd.AddCommand(modCmd)
 }
 
+// modNewRunE is runner for module new command.
 func modNewRunE(cmd *cobra.Command, args []string) error {
-	// Project dir default.
-	dir, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get working directory: %w", err)
-	}
-	verboseMessage(fmt.Sprintf("Working dir: %s", dir))
-
-	// Command to get project manifest.
-	var manifest *templates.Manifest
-	_, err = command.NewCommandWizard().
-		AddStep(command.WizardStep{
-			ID:       "project_dir",
-			Type:     command.StepPrompt,
-			Question: "Project directory",
-			Default:  dir,
-			Validate: func(value any) error {
-				val, ok := value.(string)
-				if !ok {
-					return errors.New("invalid project directory format")
-				} else if qore.ValidationIsEmpty(val) {
-					return errors.New("project directory is required")
-				}
-				return nil
-			},
-		}).
-		AddProcess("project_manifest", "📁 Reading manifest...",
-			func(results command.WizardResults, progress func(string)) (any, error) {
-				d, ok := results["project_dir"].(string)
-				if !ok {
-					return nil, errors.New("invalid project directory value")
-				}
-				dir = d
-
-				progress("📄 Reading project manifest file...")
-				time.Sleep(time.Second)
-				m, err := templates.ReadManifest(dir)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read manifest file on %s: %w", dir, err)
-				}
-				manifest = m
-
-				progress("⏳ Check manifest value...")
-				time.Sleep(time.Second)
-				if manifest.Project.Package == "" || manifest.Project.ModuleDir == "" {
-					return nil, errors.New("project package nor module directory is empty")
-				}
-
-				progress("✅ Project manifest valid")
-				return manifest, nil
-			},
-		).
-		Run()
+	// Read manifest.
+	manifest, dir, err := readManifest()
 	if err != nil {
 		return fmt.Errorf("failed to get project manifest: %w", err)
 	}
@@ -158,46 +122,6 @@ func modNewRunE(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	// Project directory & manifest.
-	// wizard.AddStep(command.WizardStep{
-	// 	ID:       "project_dir",
-	// 	Type:     command.StepPrompt,
-	// 	Question: "Project directory",
-	// 	Default:  dir,
-	// 	Validate: func(value any) error {
-	// 		val, ok := value.(string)
-	// 		if !ok {
-	// 			return errors.New("invalid project directory format")
-	// 		} else if qore.ValidationIsEmpty(val) {
-	// 			return errors.New("project directory is required")
-	// 		}
-	// 		return nil
-	// 	},
-	// }).AddProcess("project_manifest", "📁 Reading manifest...",
-	// 	func(results command.WizardResults, progress func(string)) (any, error) {
-	// 		dir, ok := results["project_dir"].(string)
-	// 		if !ok {
-	// 			return nil, errors.New("invalid project directory value")
-	// 		}
-
-	// 		progress("📄 Reading project manifest file...")
-	// 		time.Sleep(time.Second)
-	// 		manifest, err := templates.ReadManifest(dir)
-	// 		if err != nil {
-	// 			return nil, fmt.Errorf("failed to read manifest file on %s: %w", dir, err)
-	// 		}
-
-	// 		progress("⏳ Check manifest value...")
-	// 		time.Sleep(time.Second)
-	// 		if manifest.Project.Package == "" || manifest.Project.ModuleDir == "" {
-	// 			return nil, errors.New("project package nor module directory is empty")
-	// 		}
-
-	// 		progress("✅ Project manifest valid")
-	// 		return manifest, nil
-	// 	},
-	// )
-
 	// Module publicity & process generate module.
 	wizard.
 		AddConfirm("module_flag_public", "👀 Make public", false).
@@ -254,96 +178,29 @@ func modNewRunE(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// modRemoveRunE is runner for module remove command.
 func modRemoveRunE(cmd *cobra.Command, args []string) error {
-	// Project dir default.
-	dir, err := os.Getwd()
+	// Read manifest.
+	manifest, dir, err := readManifest()
 	if err != nil {
-		return fmt.Errorf("failed to get working directory: %w", err)
+		return fmt.Errorf("failed to get project manifest: %w", err)
 	}
-	verboseMessage(fmt.Sprintf("Working dir: %s", dir))
 
-	// Command to collecting existing module(s).
-	var mods []command.Option
-	var manifest *templates.Manifest
-	_, err = command.NewCommandWizard().
-		AddStep(command.WizardStep{
-			ID:       "project_dir",
-			Type:     command.StepPrompt,
-			Question: "Project directory",
-			Default:  dir,
-			Validate: func(value any) error {
-				val, ok := value.(string)
-				if !ok {
-					return errors.New("invalid project directory format")
-				} else if qore.ValidationIsEmpty(val) {
-					return errors.New("project directory is required")
-				}
-				return nil
-			},
-		}).
-		AddProcess("project_manifest", "📁 Reading manifest...",
-			func(results command.WizardResults, progress func(string)) (any, error) {
-				d, ok := results["project_dir"].(string)
-				if !ok {
-					return nil, errors.New("invalid project directory value")
-				}
-				dir = d
-
-				progress("📄 Reading project manifest file...")
-				time.Sleep(time.Second)
-				m, err := templates.ReadManifest(dir)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read manifest file on %s: %w", dir, err)
-				}
-				manifest = m
-
-				progress("⏳ Check manifest value...")
-				time.Sleep(time.Second)
-				if manifest.Project.Package == "" || manifest.Project.ModuleDir == "" {
-					return nil, errors.New("project package nor module directory is empty")
-				}
-
-				progress("✅ Project manifest valid")
-				return manifest, nil
-			},
-		).
-		AddProcess("module_collect", "📥 Collecting module(s)...",
-			func(results command.WizardResults, progress func(string)) (any, error) {
-				d, ok := results["project_dir"].(string)
-				if !ok {
-					return nil, errors.New("invalid project directory value")
-				}
-				dir = d
-				manifest, ok := results["project_manifest"].(*templates.Manifest)
-				if !ok {
-					return nil, errors.New("invalid manifest name value")
-				}
-				modDir := filepath.Join(dir, manifest.Project.ModuleDir)
-
-				progress("⏳ Collecting existing module(s)...")
-				time.Sleep(time.Second)
-				entries, err := os.ReadDir(modDir)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read module directory %s: %w", modDir, err)
-				}
-				for _, entry := range entries {
-					if entry.IsDir() {
-						mods = append(mods, command.Option{
-							Key:   entry.Name(),
-							Value: qore.StringToCammelCase(entry.Name()),
-						})
-					}
-				}
-				return "Success", nil
-			},
-		).
-		Run()
+	// Read existing modules.
+	var modchoices []command.Option
+	mods, err := readModule(manifest, dir)
 	if err != nil {
-		return fmt.Errorf("failed collect existing module(s): %w", err)
+		return fmt.Errorf("failed to get existing modules: %w", err)
+	}
+	for _, mod := range mods {
+		modchoices = append(modchoices, command.Option{
+			Key:   mod,
+			Value: qore.StringToCammelCase(mod),
+		})
 	}
 
 	// Command to execute remove existing module(s).
-	if len(mods) > 0 {
+	if len(modchoices) > 0 {
 		wizard := command.NewCommandWizard(command.WizardConfig{
 			Title:        "🗑️  Module remover",
 			Description:  "Remove existing module from your application project",
@@ -352,7 +209,7 @@ func modRemoveRunE(cmd *cobra.Command, args []string) error {
 			ClearHistory: true,
 			ResultColor:  command.ColorCyan,
 		}).
-			AddMultiChoice("modules", "📦 Which module(s) you want to remove", mods).
+			AddMultiChoice("modules", "📦 Which module(s) you want to remove", modchoices).
 			AddConfirm("remove_confirm", "Are you sure to remove module(s)", false).
 			AddProcess("remove", "❌ Removing module(s)...",
 				func(results command.WizardResults, progress func(string)) (any, error) {
@@ -395,4 +252,112 @@ func modRemoveRunE(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+func modDepAddRunE(cmd *cobra.Command, arg []string) error {
+	// Read manifest.
+	manifest, dir, err := readManifest()
+	if err != nil {
+		return fmt.Errorf("failed to get project manifest: %w", err)
+	}
+
+	// Read existing modules.
+	var modchoices []command.Option
+	mods, err := readModule(manifest, dir)
+	if err != nil {
+		return fmt.Errorf("failed to get existing modules: %w", err)
+	}
+	for _, mod := range mods {
+		modchoices = append(modchoices, command.Option{
+			Key:   mod,
+			Value: qore.StringToCammelCase(mod),
+		})
+	}
+	if len(modchoices) == 0 {
+		return errors.New("does not have any module")
+	}
+
+	// Command wizard.
+	wizard := command.NewCommandWizard(command.WizardConfig{
+		Title:        "🧩 Add Dependency",
+		Description:  "Adding dependency into existing module",
+		ShowProgress: true,
+		ClearScreen:  true,
+		ClearHistory: true,
+		ResultColor:  command.ColorCyan,
+	}).AddMultiChoice("modules", "📦 Which module(s) you want to add dependency", modchoices)
+	if modNewDep {
+		wizard = wizard.AddPrompt("dep", "Dependency package path", true)
+	} else {
+		var depchoice []command.Option
+		for name, v := range manifest.Dependencies {
+			depchoice = append(depchoice, command.Option{
+				Key:   v.Path,
+				Value: name,
+			})
+		}
+		if len(depchoice) == 0 {
+			return errors.New("existing dependency not found, use command flag --new to input new dependency package")
+		}
+		wizard = wizard.AddChoice("dep", "🧩 Chose dependency", depchoice, true)
+	}
+	wizard.AddProcess("process", "🚜 Processing...", func(results command.WizardResults, progress func(string)) (any, error) {
+		// Get dependency.
+		var depname, deppkg string
+		progress("🧩 Get dependency...")
+		time.Sleep(time.Second)
+		switch v := results["dep"].(type) {
+		case string:
+			depname = path.Base(v)
+			deppkg = v
+		case command.Option:
+			depname = v.Value
+			deppkg = fmt.Sprintf("%v", v.Key)
+		default:
+			return nil, errors.New("dependency is required")
+		}
+
+		// Write manifest.
+		progress("📝 Writing manifest...")
+		time.Sleep(time.Second)
+		var deps templates.Dependencies = templates.Dependencies{
+			depname: templates.Dependency{Path: deppkg},
+		}
+		if len(manifest.Dependencies) == 0 {
+			manifest.Dependencies = deps
+		} else {
+			maps.Copy(manifest.Dependencies, deps)
+		}
+		if err := templates.WriteManifest(dir, manifest); err != nil {
+			return nil, err
+		}
+
+		// Get module(s).
+		moduleopts, _ := results["modules"].([]command.Option)
+		if len(moduleopts) == 0 {
+			return nil, errors.New("module is required")
+		}
+
+		// Generating code.
+		progress("⚙️ Generating code...")
+		time.Sleep(time.Second)
+		var modules []*templates.Module
+		for _, opt := range moduleopts {
+			modules = append(modules, &templates.Module{
+				RootProjectDir: dir,
+				Dir:            manifest.Project.ModuleDir,
+				Name:           strings.ToLower(opt.Value),
+				Pkg:            fmt.Sprintf("%v", opt.Key),
+				Dependencies:   deps,
+			})
+		}
+		if err := templates.UpdateModule(modules); err != nil {
+			return nil, err
+		}
+		return "Success", nil
+	})
+
+	// Run.
+	_, err = wizard.Run()
+	return err
 }

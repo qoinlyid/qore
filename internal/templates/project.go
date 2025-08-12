@@ -31,7 +31,7 @@ type Project struct {
 
 func encodeManifest(manifest *Manifest) ([]byte, error) {
 	if manifest == nil {
-		return nil, errors.New("project is required")
+		return nil, errors.New("manifest is required")
 	}
 
 	project, err := toml.Marshal(struct {
@@ -76,4 +76,19 @@ func ReadManifest(dir string) (*Manifest, error) {
 
 	// Decode manifest.
 	return decodeManifest(data)
+}
+
+// WriteManifest writes manifest data to the project manifest file,
+func WriteManifest(dir string, manifest *Manifest) error {
+	b, err := encodeManifest(manifest)
+	if err != nil {
+		return err
+	}
+
+	fpath := filepath.Join(dir, manifestFilename)
+	err = os.WriteFile(fpath, b, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write manifest %s: %w", fpath, err)
+	}
+	return nil
 }

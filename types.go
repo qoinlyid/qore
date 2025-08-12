@@ -29,15 +29,6 @@ type Validatable interface {
 // LogLevel custom type for logging level.
 type LogLevel string
 
-// Dependency is package that will be depent on module(s).
-type Dependency interface {
-	Name() string
-	Priority() int
-	IsReady() bool
-	Open() error
-	Close() error
-}
-
 // Module is qore module interface.
 type Module interface {
 	HttpRoutes(app *App)
